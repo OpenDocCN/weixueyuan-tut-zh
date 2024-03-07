@@ -1,44 +1,67 @@
-# HBase Region 分区及定位
+# Redis 和数据库的结合
 
-> 原文：[`c.biancheng.net/view/6528.html`](http://c.biancheng.net/view/6528.html)
+> 原文：[`c.biancheng.net/view/4571.html`](http://c.biancheng.net/view/4571.html)
 
-在 HBase 中，表的所有行都是按照 RowKey 的字典序排列的，表在行的方向上分割为多个分区（Region），如下图所示。
+使用 Redis 可以优化性能，但是存在 Redis 的数据和数据库同步的问题，这是我们需要关注的问题。假设两个业务逻辑都是在操作数据库的同一条记录，而 Redis 和数据库不一致，如图 1 的场景。
+![Redis 和数据库不一致](img/be798cc1e52234e3966f39746afbc364.png)
+图 1  Redis 和数据库不一致
+在图 1 中，T1 时刻以键 key1 保存数据到 Redis，T2 时刻刷新进入数据库，但是 T3 时刻发生了其他业务需要改变数据库同一条记录的数据，但是采用了 key2 保存到 Redis 中，然后又写入了更新数据到数据库中，此时在 Redis 中 key1 的数据是脏数据，和数据库的数据并不一致。
 
-![](img/abfef04d0933f9ac749192c0e3a1564c.png)
-每张表一开始只有一个 Region，但是随着数据的插入，HBase 会根据一定的规则将表进行水平拆分，形成两个 Region。当表中的行越来越多时，就会产生越来越多的 Region，而这些 Region 无法存储到一台机器上时，则可将其分布存储到多台机器上。
+而图 1 只是数据不一致的一个可能的原因，实际情况可能存在多种，比如数据库的事务是完善的，而对于 Redis 的事务，通过学习应该清楚它并不是那么严格的，如果发生异常回滚的事件，那么 Redis 的数据可能就和数据库不太一致了，所以要保存数据的一致性是相当困难的。
 
-Master 主服务器把不同的 Region 分配到不同的 Region 服务器上，同一个行键的 Region 不会被拆分到多个 Region 服务器上。每个 Region 服务器负责管理一个 Region，通常在每个 Region 服务器上会放置 10 ~ 1000 个 Region，HBase 中 Region 的物理存储如下图所示。
+但是不用沮丧，因为互联网系统显示给用户的信息往往并不需要完全是“最新的”，有些数据允许延迟。举个例子，一个购物网站会有一个用户购买排名榜，如果做成实时的，每一笔投资都会引发重新计算，那么网站的性能就存在极大的压力，但是这个排名榜却没有太大的意义。
 
-![](img/c11980715329613b16b79c79bfcb8e24.png)客户端在插入、删除、查询数据时需要知道哪个 Region 服务器上存储所需的数据，这个查找 Region 的过程称为 Region 定位。
+同样，商品的总数有时候只需要去实现一个非实时的数据。这些在互联网系统中也是十分常见的，一般而言，可以在某段时间进行刷新（比如以一个小时为刷新间隔），排出这段时间的最新排名，这就是延迟性的更新。但是对于一些内容则需要最新的，尤其是当前用户的交易记录、购买时商品的数量，这些需要实时处理，以避免数据的不一致，因为这些都是对于企业和用户重要的记录。
 
-HBase 中的每个 Region 由三个要素组成，包括 Region 所属的表、第一行和最后一行。其中，第一个 Region 没有首行，最后一个 Region 没有末行。每个 Region 都有一个 RegionlD 来标识它的唯一性，Region 标识符就可以表示成“表名+开始行键+RegionID”。
+我们会考虑读/写以数据库的最新记录为主，并且同步写入 Redis，这样数据就能保持一致性了，而对于一些常用的只需要显示的，则以查询 Redis 为主。这样网站的性能就很高了，毕竟写入的次数远比查询的次数要少得多得多。下面先对数据库的读/写操作进行基本阐述。
 
-## Meta 表
+## Redis 和数据库读操作
 
-有了 Region 标识符，就可以唯一标识每个 Region。为了定位每个 Region 所在的位置，可以构建一张映射表。
+数据缓存往往会在 Redis 上设置超时时间，当设置 Redis 的数据超时后，Redis 就没法读出数据了，这个时候就会触发程序读取数据库，然后将读取的数据库数据写入 Redis（此时会给 Redis 重设超时时间），这样程序在读取的过程中就能按一定的时间间隔刷新数据了，读取数据的流程如图 2 所示。
+![读取数据的流程](img/3621079fa2c20737834712d00f8721a1.png)
+图 2  读取数据的流程
+下面写出这个流程的伪代码：
 
-映射表的每个条目包含两项内容，一项是 Region 标识符，另一项是 Region 服务器标识。这个条目就表示 Region 和 Region 服务器之间的对应关系，从而就可以使用户知道某个 Region 存储在哪个 Region 服务器中。这个映射表包含了关于 Region 的元数据，因此也被称为“元数据表”，又名“Meta 表”。
+```
 
-使用 scan 命令可查看 Meta 表的结构，如图所示。
+public DataObject readMethod(args) {
+    // 尝试从 Redis 中读取数据
+    DataObject data = getRedis(key);
+    if(data != null) {
+        // 读取数据返回为空，失败
+        // 从数据库中读取数据
+        data = getFromDataBase();
+        // 重新写入 Redis，以便以后读出
+        writeRedis(key,data);
+        // 设置 Redis 的超时时间为 5 分钟
+        setRedisExpire(key,5);
+    }
+    return data;
+}
+```
 
-![](img/21bf9d583e1f54a2b6040996c3606057.png)Meta 表中的每一行记录了一个 Region 的信息。RowKey 包含表名、起始行键和时间戳信息，中间用逗号隔开，第一个 Region 的起始行键为空。时间戳之后用`.`隔开的为分区名称的编码字符串，该信息是由前面的表名、起始行键和时间戳进行字符串编码后形成的。
+上面的伪代码完成了图 2 所描述的过程。这样每当读取 Redis 数据超过 5 分钟，Redis 就不能读到超时数据了，只能重新从 Redis 中读取，保证了一定的实时性，也避免了多次访问数据库造成的系统性能低下的情况。
 
-Meta 表里有一个列族 info。info 包含了三个列，分别为 RegioninfoServer 和 Serverstartcode。Regionlnfo 中记录了 Region 的详细信息，包括行键范围 StartKey 和 EndKey、列族列表和属性。
+## Redis 和数据库写操作
 
-Server 记录了管理该 Region 的 Region 服务器的地址，如 localhost:16201。Serverstartcode 记录了 Region 服务器开始托管该 Region 的时间。
+写操作要考虑数据一致的问题，尤其是那些重要的业务数据，所以首先应该考虑从数据库中读取最新的数据，然后对数据进行操作，最后把数据写入 Redis 缓存中，如图 3 所示。![写入数据的流程](img/65f6fd89daffefdcf147ffcb1bbdcfc6.png)
+图 3  写入数据的流程
+写入业务数据，先从数据库中读取最新数据，然后进行业务操作，更新业务数据到数据库后，再将数据刷新到 Redis 缓存中，这样就完成了一次写操作。这样的操作就能避免将脏数据写入数据库中，这类问题在操作时要注意。
 
-当用户表特别大时，用户表的 Region 也会非常多。Meta 表存储了这些 Region 信息，也变得非常大。Meta 表也需要划分成多个 Region，每个 Meta 分区记录一部分用户表和分区管理的情况。
+下面写出这个流程的伪代码：
 
-## Region 定位
+```
 
-在 HBase 的早期设计中，Region 的查找是通过三层架构来进行查询的，即在集群中有一个总入口 ROOT 表，记录了 Meta 表分区信息及各个入口的地址。这个 ROOT 表存储在某个 Region 服务器上，但是它的地址保存在 ZooKeeper 中。
+public DataObject writeMethod(args) {
+    //从数据库里读取最新数据
+    DataObject dataObject = getFromDataBase(args);
+    //执行业务逻辑
+    ExecLogic(dataObject);
+    //更新数据库数据
+    updateDataBase(dataObject);
+    //刷新 Redis 缓存
+    updateRedisData(dataObject);
+}
+```
 
-这种早期的三层架构通过先找到 ROOT 表，从中获取分区 Meta 表位置；然后再获取分区 Meta 表信息，找出 Region 所在的 Region 服务器。
-
-从 0.96 版本以后，三层架构被改为二层架构，去掉了 ROOT 表，同时 ZooKeeper 中的 /hbase/root-region-server 也被去掉。Meta 表所在的 Region 服务器信息直接存储在 ZooKeeper 中的 /hbase/meta-region-server 中。
-
-下图为表和分区的分级管理机制。当客户端进行数据操作时, 根据操作的表名和行键，再按照一定的顺序即可寻找到对应的分区数据。
-
-![](img/c6d12de00090770ea1d1ec636969b01c.png)客户端通过 ZooKeeper 获取 Meta 表分区存储的地址，首先在对应的 Region 服务器上获取 Meta 表的信息，得到所需的表和行键所在的 Region 信息，然后从 Region 服务器上找到所需的数据。
-
-一般客户端获取 Region 信息后会进行缓存，用户下次再查询不必从 ZooKeeper 开始寻址。
+上面的伪代码完成了图 3 所描述的过程。首先，从数据库中读取最新的数据，以规避缓存中的脏数据问题，执行了逻辑，修改了部分业务数据。然后，把这些数据保存到数据库里，最后，刷新这些数据到 Redis 中。

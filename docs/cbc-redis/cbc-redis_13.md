@@ -1,79 +1,219 @@
-# HBase 数据模型解析
+# Redis 有序集合（sorted set）串数据结构和常用命令
 
-> 原文：[`c.biancheng.net/view/6517.html`](http://c.biancheng.net/view/6517.html)
+> 原文：[`c.biancheng.net/view/4537.html`](http://c.biancheng.net/view/4537.html)
 
-HBase 是一种列存储模式与键值对存储模式结合的 NoSQL 数据库，它具有灵活的数据模型，不仅可以基于键进行快速查询，还可以实现基于值、列名等的全文遍历和检索。
+有序集合和集合类似，只是说它是有序的，和无序集合的主要区别在于每一个元素除了值之外，它还会多一个分数。分数是一个浮点数，在 Java 中是使用双精度表示的，根据分数，Redis 就可以支持对分数从小到大或者从大到小的排序。
 
-HBase 可以实现自动的数据分片，用户不需要知道数据存储在哪个节点上，只要说明检索的要求，系统会自动进行数据的查询和反馈。
+这里和无序集合一样，对于每一个元素都是唯一的，但是对于不同元素而言，它的分数可以一样。元素也是 String 数据类型，也是一种基于 hash 的存储结构。
 
-## HBase 的基本概念
+集合是通过哈希表实现的，所以添加、删除、查找的复杂度都是 0（1）。集合中最大的成员数为 2 的 32 次方减 1（40 多亿个成员），有序集合的数据结构如图 1 所示。![有序集合的数据结构](img/f21d920717a7badd0c06f3875777edb4.png)
+图 1  有序集合的数据结构
+有序集合是依赖 key 标示它是属于哪个集合，依赖分数进行排序，所以值和分数是必须的，而实际上不仅可以对分数进行排序，在满足一定的条件下，也可以对值进行排序。
 
-HBase 不支持关系模型，它可以根据用户的需求提供更灵活和可扩展的表设计。与传统的关系型数据库类似，HBase 也是以表的方式组织数据，应用程序将数据存于 HBase 的表中，HBase 的表也由行和列组成。
+## Redis 基础命令
 
-但有一点不同的是，HBase 有列族的概念，它将一列或多列组织在一起，HBase 的每个列必须属于某一个列族。
+有序集合和无序集合的命令是接近的，只是在这些命令的基础上，会增加对于排序的操作，这些是我们在使用的时候需要注意的细节。
 
-下面具体介绍 HBase 数据模型中一些名词的概念。
+下面讲解这些常用的有序集合的部分命令。有些时候 Redis 借助数据区间的表示方法来表示包含或者不包含，比如在数学的区间表示中，[2,5] 表示包含 2，但是不包含 5 的区间。具体如表 1 所示。
 
-#### 1) 表（Table）
+表 1 Redis 有序集合的部分命令
 
-HBase 中的数据以表的形式存储。同一个表中的数据通常是相关的，使用表主要是可以把某些列组织起来一起访问。表名作为 HDFS 存储路径的一部分来使用，在 HDFS 中可以看到每个表名都作为独立的目录结构。
+| 命   令 | 说   明  | 备   注 |
+| zadd key score1 value1 [score2 value2......] | 向有序集合的 key，增加一个或者多个成员 | 如果不存在对应的 key，则创建键为 key 的有序集合 |
+| zcard key  | 获取有序集合的成员数 | — |
+| zcount key min max   | 根据分数返回对应的成员列表  | min 为最小值，max 为最大值，默认为包含 min 和 max 值，采用数学区间表示的方法，如果需要不包含，则在分数前面加入“(”，注意不支持“[”表示 |
+| zincrby key increment member | 给有序集合成员值为 member 的分数增加 increment |  — |
+| zinterstore desKey numkeys key1 [key2 key3......] | 求多个有序集合的交集，并且将结果保存到 desKey 中 | numkeys 是一个整数，表示多少个有序集合 |
+| zlexcount key min max   | 求有序集合 key 成员值在 min 和 max 的范围 | 这里范围为 key 的成员值，Redis 借助数据区间的表示方法，“[”表示包含该值，“(”表示不包含该值 |
+| zrange key start stop [withscores] | 按照分值的大小（从小到大）返回成员，加入 start 和 stop 参数可以截取某一段返回。如果输入可选项 withscores，则连同分数一起返回 | 这里记集合最人长度为 len，则 Redis 会将集合排序后，形成一个从 0 到 len-1 的下标，然后根据 start 和 stop 控制的下标（包含 start 和 stop）返回 |
+| zrank key member | 按从小到大求有序集合的排行 | 排名第一的为 0，第二的为 1…… |
+| zrangebylex key min max [limit offset count] | 根据值的大小，从小到大排序，min 为最小值，max 为最大值；limit 选项可选，当 Redis 求出范围集合后，会生产下标 0 到 n，然后根据偏移量 offset 和限定返回数 count，返回对应的成员 | 这里范围为 key 的成员值，Redis 借助数学区间的表示方法，“[”表示包含该值，“(”表示不包含该值 |
+| zrangebyscore key min max [withscores] [limit offset count] | 根据分数大小，从小到大求取范围，选项 withscores 和 limit 请参考 zrange 命令和 zrangebylex 说明 | 根据分析求取集合的范围。这里默认包含 min 和 max，如果不想包含，则在参数前加入“(”， 注意不支持“[”表示 |
+| zremrangebyscore key start stop | 根据分数区间进行删除 | 按照 socre 进行排序，然后排除 0 到 len-1 的下标，然后根据 start 和 stop 进行删除，Redis 借助数学区间的表示方法，“[”表示包含该值，“(” 表示不包含该值 |
+| zremrangebyrank key start stop | 按照分数排行从小到大的排序删除，从 0 开始计算 | — |
+| zremrangebylex key min max | 按照值的分布进行删除 | — |
+| zrevrange key start stop [withscores] | 从大到小的按分数排序，参数请参见 zrange | 与 zrange 相同，只是排序是从大到小 |
+| zrevrangebyscore key max min [withscores] | 从大到小的按分数排序，参数请参见 zrangebyscore | 与 zrangebyscore 相同，只是排序是从大到小 |
+| zrevrank key member | 按从大到小的顺序，求元素的排行 |  排名第一位 0，第二位 1...... |
+| zscore key member | 返回成员的分数值 | 返回成员的分数 |
+| zunionstore desKey numKeys key1 [key2 key3 key4......] | 求多个有序集合的并集，其中 numKeys 是有序集合的个数 | —— |
 
-#### 2) 行（Row）
+在对有序集合、下标、区间的表示方法进行操作的时候，需要十分小心命令，注意它是操作分数还是值，稍有不慎就会出现问题。
 
-在 HBase 表里，每一行代表一个数据对象，每一行都以行键（Row Key）来进行唯一标识，行键可以是任意字符串。在 HBase 内部，行键是不可分割的字节数组，并且行键是按照字典排序由低到高存储在表中的。在 HBase 中可以针对行键建立索引，提高检索数据的速度。
+这里命令比较多，也有些命令比较难使用，在使用的时候，务必要小心，不过好在我们使用 zset 的频率并不是太高，下面是测试结果——有序集合命令展示，如图 2 所示。
 
-#### 3) 列族（Colunm Family）
+![有序集合命令展示](img/1c9ebed612b5c1356fae5129e8ee717c.png)
+图 2 有序集合命令展示
 
-HBase 中的列族是一些列的集合，列族中所有列成员有着相同的前缀，列族的名字必须是可显示的字符串。列族支持动态扩展，用户可以很轻松地添加一个列族或列，无须预定义列的数量以及类型。所有列均以字符串形式存储，用户在使用时需要自行进行数据类型转换。
+## spring-data-redis 对有序集合的封装
 
-#### 4) 列标识（Column Qualifier）
+在 Spring 中使用 Redis 的有序集合，需要注意的是 Spring 对 Redis 有序集合的元素的值和分数的范围（Range）和限制（Limit）进行了封装，在演示如何使用 Spring 操作有序集合前要进一步了解它的封装。
 
-列族中的数据通过列标识来进行定位，列标识也没有特定的数据类型，以二进制字节来存储。通常以 Column Family：Colunm Qualifier 来确定列族中的某列。
+先介绍一个主要的接口——TypedTuple，它不是一个普通的接口，而一个内部接口，它是 org.springframework.data.redis.core.ZSetOperations 接口的内部接口，它定义了两个方法，代码如下所示。
 
-#### 5) 单元格（Cell）
+```
 
-每一个行键、列族、列标识共同确定一个单元格，单元格的内容没有特定的数据类型，以二进制字节来存储。每个单元格保存着同一份数据的多个版本，不同时间版本的数据按照时间先后顺序排序，最新的数据排在最前面。单元格可以用 <RowKey,Column Family: Column Qualifier,Timestamp> 元组来进行访问。
+public interface ZSetOperations<K,V>{
+    ......
+public interface TypedTuple<V> extends Comparable<TypedTuple<V>< {
+    V getValue();
 
-#### 6) 时间戳（Timestamp）
+    Double getScore();
+}
+......
+}
+```
 
-在默认情况下，每一个单元格插入数据时都会用时间戳来进行版本标识。读取单元格数据时，如果时间戳没有被指定，则默认返回最新的数据；写入新的单元格数据时，如果没有设置时间戳，默认使用当前时间。每一个列族的单元数据的版本数量都被 HBase 单独维护，默认情况下 HBase 保留 3 个版本数据。
+这里的 getValue() 是获取值，而 getScore() 是获取分数，但是它只是一个接口，而不是一个实现类。spring-data-redis 提供了一个默认的实现类—— DefaultTypedTuple，同样它会实现 TypedTuple 接口，在默认的情况下 Spring 就会把带有分数的有序集合的值和分数封装到这个类中，这样就可以通过这个类对象读取对应的值和分数了。
 
-## 数据模型
+Spring 不仅对有序集合元素封装，而且对范围也进行了封装，方便使用。它是使用接口 org.springframework.data.redis.connection.RedisZSetCommands 下的内部类 Range 进行封装的，它有一个静态的 range() 方法，使用它就可以生成一个 Range 对象了，只是要清楚 Range 对象的几个方法才行，为此我们来看看下面的伪代码。
 
-表是 HBase 中数据的逻辑组织方式，从用户视角来看，HBase 表的逻辑模型如表 1 所示。HBase 中的一个表有若干行，每行有多个列族，每个列族中包含多个列，而列中的值有多个版本。 
+```
 
-表 1 ：HBase 逻辑数据模型
+//设置大于等于 min
+public Range gte(Object min)
+//设置大于 min
+public Range gt(Object min)
+//设置小于等于 max
+public Range lte(Object max)
+//设置小于 max
+public Range lt(Object max)
+```
 
-| 行键 | 列族 StuInfo | 列族 Grades | 时间戳 |
-| Name | Age | Sex | Class | BigData | Computer | Math |
-| 0001 | Tom Green | 18 | Male |   | 80 | 90 | 85 | T2 |
-| 0002 | Amy | 19 |   | 01 | 95 |   | 89 | T1 |
-| 0003 | Allen | 19 | Male | 02 | 90 |   | 88 | T1 |
+这 4 个方法就是最常用的范围方法。下面讨论一下限制，它是接口 org.springframework.data.redis.connection.RedisZSetCommands 下的内部类，它是一个简单的 POJO，它存在两个属性，它们的 getter 和 setter 方法，如下面的代码所示。
 
-表 1 展示的是 HBase 中的学生信息表 Student，有三行记录和两个列族，行键分别为 0001、0002 和 0003，两个列族分别为 Stulnfo 和 Grades，每个列族中含有若干列，如列族 Stulnfo 包括 Name、Age、Sex 和 Class 四列，列族 Grades 包括 BigData、Computer 和 Math 三列。
+```
 
-在 HBase 中，列不是固定的表结构，在创建表时，不需要预先定义列名，可以在插入数据时临时创建。
+// ......
+public interface RedisZSetCommands {
+    // ......
+public class Limit {
+    int offset;
+    int count;
+//setter 和 getter 方法
+}
+//......
+}
+```
 
-从表 1 的逻辑模型来看，HBase 表与关系型数据库中的表结构之间似乎没有太大差异，只不过多了列族的概念。但实际上是有很大差别的，关系型数据库中表的结构需要预先定义，如列名及其数据类型和值域等内容。
+通过属性的名称很容易知道：offset 代表从第几个开始截取，而 count 代表限制返回的总数量。
 
-如果需要添加新列，则需要修改表结构，这会对已有的数据产生很大影响。同时，关系型数据库中的表为每个列预留了存储空间，即表 1 中的空白 Cell 数据在关系型数据库中以“NULL”值占用存储空间。因此，对稀疏数据来说，关系型数据库表中就会产生很多“NULL”值，消耗大量的存储空间。
+## 通过 Spring 操作有序集合
 
-在 HBase 中，如表 1 中的空白 Cell 在物理上是不占用存储空间的，即不会存储空白的键值对。因此，若一个请求为获取 RowKey 为 0001 在 T2 时间的 Stulnfo:class 值时，其结果为空。类似地，若一个请求为获取 RowKey 为 0002 在 T1 时间的 Grades Computer 值时，其结果也为空。
+我们讨论了 spring-data-redis 项目对有序集合的封装，在此基础上，这节给出演示的例子。只是在测试代码前，要把 RedisTemplate 的 keySerializer 和 valueSerializer 属性都修改为字符串序列化器 StringRedisSerializer，测试代码如下所示。
 
-与面向行存储的关系型数据库不同，HBase 是面向列存储的，且在实际的物理存储中，列族是分开存储的，即表 1 中的学生信息表将被存储为 Stulnfo 和 Grades 两个部分。
+```
 
-表 2 展示了 Stulnfo 这个列族的实际物理存储方式，列族 Grades 的存储与之类似。在表 2 中可以看到空白 Cell 是没有被存储下来的。
+public static void testZset() {
+    ApplicationContext applicationContext = new ClassPathXmlApplicationContext(
+                "applicationContext.xml");
+    RedisTemplate redisTemplate = applicationContext.getBean(RedisTemplate.class);
+    // Spring 提供接口 TypedTuple 操作有序集合
+    Set<TypedTuple> set1 = new HashSet<TypedTuple>();
+    Set<TypedTuple> set2 = new HashSet<TypedTuple>();
+    int j = 9;
+    for (int i = 1; i <= 9; i++) {
+        j--;
+        // 计算分数和值
+        Double score1 = Double.valueOf(i);
+        String value1 = "x" + i;
+        Double score2 = Double.valueOf(j);
+        String value2 = j % 2 == 1 ? "y" + j : "x" + j;
+        // 使用 Spring 提供的默认 TypedTuple--DefaultTypedTuple
+        TypedTuple typedTuple1 = new DefaultTypedTuple(value1, score1);
+        set1.add(typedTuple1);
+        TypedTuple typedTuple2 = new DefaultTypedTuple(value2, score2);
+        set2.add(typedTuple2);
+    }
+    // 将元素插入有序集合 zset1
+    redisTemplate.opsForZSet().add("zset1", set1);
+    redisTemplate.opsForZSet().add("zset2", set2);
+    // 统计总数
+    Long size = null;
+    size = redisTemplate.opsForZSet().zCard("set1");
+    // 计分数为 score，那么下面的方法就是求 3<=score<=6 的元素
+    size = redisTemplate.opsForZSet().count("zset1", 3, 6);
+    Set set = null;
+    // 从下标一开始截取 5 个元素，但是不返回分数，每一个元索是 String
+    set = redisTemplate.opsForZSet().range("zset1", 1, 5);
+    printSet(set);
+    // 截取集合所有元素，并且对集合按分数排序，并返回分数，每一个元素是 TypedTuple
+    set = redisTemplate.opsForZSet().rangeWithScores("zset1", 0, -1);
+    printTypedTuple(set);
+    // 将 zset1 和 zset2 两个集合的交集放入集合 inter_zset
+    size = redisTemplate.opsForZSet().intersectAndStore("zset1", "zset2","inter_zset");
+    // 区间
+    Range range = Range.range();
+    range.lt("x8");// 小于
+    range.gt("x1"); // 大于
+    set = redisTemplate.opsForZSet().rangeByLex("zset1", range);
+    printSet(set);
+    range.lte("x8"); // 小于等于
+    range.gte("xl"); // 大于等于
+    set = redisTemplate.opsForZSet().rangeByLex("zset1", range);
+    printSet(set);
+    // 限制返回个数
+    Limit limit = Limit.limit();
+    // 限制返回个数
+    limit.count(4);
+    // 限制从第五个开始截取
+    limit.offset(5);
+    // 求区间内的元素，并限制返回 4 条
+    set = redisTemplate.opsForZSet().rangeByLex("zset1", range, limit);
+    printSet(set);
+    // 求排行，排名第 1 返回 0，第 2 返回 1
+    Long rank = redisTemplate.opsForZSet().rank("zset1", "x4");
+    System.err.println("rank = " + rank);
+    // 删除元素，返回删除个数
+    size = redisTemplate.opsForZSet().remove("zset1", "x5", "x6");
+    System.err.println("delete = " + size);
+    // 按照排行删除从 0 开始算起，这里将删除第排名第 2 和第 3 的元素
+    size = redisTemplate.opsForZSet().removeRange("zset2", 1, 2);
+    // 获取所有集合的元素和分数，以-1 代表全部元素
+    set = redisTemplate.opsForZSet().rangeWithScores("zset2", 0, -1);
+    printTypedTuple(set);
+    // 删除指定的元素
+    size = redisTemplate.opsForZSet().remove("zset2", "y5", "y3");
+    System.err.println(size);
+    // 给集合中的一个元素的分数加上 11
+    Double dbl = redisTemplate.opsForZSet().incrementScore("zset1", "x1",11);
+    redisTemplate.opsForZSet().removeRangeByScore("zset1", 1, 2);
+    set = redisTemplate.opsForZSet().reverseRangeWithScores("zset2", 1, 10);
+    printTypedTuple(set);
+}
 
-表 2：StuInfo 列族的物理存储方式
+/**
+* 打印 TypedTuple 集合
+* @param set
+* -- Set<TypedTuple>
+*/
+public static void printTypedTuple(Set<TypedTuple> set) {
+    if (set != null && set.isEmpty()) {
+        return;
+    }
+    Iterator iterator = set.iterator();
+    while (iterator.hasNext()) {
+        TypedTuple val = (TypedTuple) iterator.next();
+        System.err.print("{value = " + val.getValue() + ", score = "
+                + val.getScore() + "}\n");
+    }
+}
 
-| 行键 | 列标识 | 值 | 时间戳 |
-| 0001 | Name | TomGreen | T2 |
-| 0001 | Age | 18 | T2 |
-| 0001 | Sex | Male | T2 |
-| 0002 | Name | Amy | T1 |
-| 0002 | Age | 19 | T1 |
-| 0002 | Class | 01 | T1 |
-| 0003 | Name | Allen | T1 |
-| 0003 | Age | 19 | T1 |
-| 0003 | Sex | Male | T1 |
-| 0003 | Class | 02 | T1 |
+/**
+* 打印普通集合
+* @param set 普通集合
+*/
+public static void printSet(Set set) {
+    if (set != null && set.isEmpty()) {
+        return;
+    }
+    Iterator iterator = set.iterator();
+    while (iterator .hasNext()) {
+    Object val = iterator.next();
+    System. out.print (val +"\t");
+    }
+    System.out.println();
+}
+```
+
+上面的代码演示了大部分 Spring 对有序集合的操作，笔者也给了比较清晰的注释，读者参考后一步步验证，就能熟悉如何通过 Spring 操作有序集合了。

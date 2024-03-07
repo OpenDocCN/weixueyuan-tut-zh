@@ -1,73 +1,182 @@
-# HBase 的使用场景及案例
+# Redis 链表（linked-list）数据结构和常用命令
 
-> 原文：[`c.biancheng.net/view/6514.html`](http://c.biancheng.net/view/6514.html)
+> 原文：[`c.biancheng.net/view/4531.html`](http://c.biancheng.net/view/4531.html)
 
-HBase 解决不了所有的问题，但是针对某些特点的数据可以使用 HBase 高效地解决，如以下的应用场景。
+链表结构是 Redis 中一个常用的结构，它可以存储多个字符串，而且它是有序的，能够存储 2 的 32 次方减 1 个节点（超过 40 亿个节点）。
 
-*   数据模式是动态的或者可变的，且支持半结构化和非结构化的数据。
-*   数据库中的很多列都包含了很多空字段，在 HBase 中的空字段不会像在关系型数据库中占用空间。
-*   需要很高的吞吐量，瞬间写入量很大。
-*   数据有很多版本需要维护，HBase 利用时间戳来区分不同版本的数据。
-*   具有高可扩展性，能动态地扩展整个存储系统。
+Redis 链表是双向的，因此即可以从左到右，也可以从右到左遍历它存储的节点，链表结构如图 1 所示。
+![链表结构](img/35b6738c630b117a7b9dec239edff30e.png)
+图 1  链表结构
+由于是双向链表，所以只能够从左到右，或者从右到左地访问和操作链表里面的数据节点。但是使用链表结构就意味着读性能的丧失，所以要在大量数据中找到一个节点的操作性能是不佳的，因为链表只能从一个方向中去遍历所要节点。
 
-在实际应用中，有很多公司使用 HBase，如 Facebook 公司的 Social Inbox 系统，使用 HBase 作为消息服务的基础存储设施，每月可处理几千亿条的消息；Yahoo 公司使用 HBase 存储检查近似重复的指纹信息的文档，它的集群当中分别运行着 Hadoop 和 HBase，表中存了上百万行数据；Adobe 公司使用 Hadoop+HBase 的生产集群，将数据直接持续地存储在 HBase 中，并将 HBase 作为数据源进行 MapReduce 的作业处理；Apache 公司使用 HBase 来维护 Wiki 的相关信息。
+比如从查找节点 10 000 开始查询，它需要按照节点 1、节点 2、节点 3……直至节点 10 000，这样的顺序查找，然后把一个个节点和你给出的值比对，才能确定节点所在。如果这个链表很大，如有上百万个节点，可能需要遍历几十万次才能找到所需要的节点，显然查找性能是不佳的。
 
-下面通过几个实际案例来介绍 HBase 的应用场景。
+而链表结构的优势在于插入和删除的便利，因为链表的数据节点是分配在不同的内存区域的，并不连续，只是根据上一个节点保存下一个节点的顺序来索引而已，无需移动元素。其新增和删除的操作如图 2 所示。
+![链表的新增和删除操作](img/5cd8c1dc85854eb3081358e1847e52e6.png)
+图 2  链表的新增和删除操作
+图 2 的阿拉伯数字代表新增的步骤，而汉字数字代表删除步骤。
 
-## 搜索引擎应用
+#### 1）新增节点
 
-前面讲到 HBase 是 Google Bigtable 的开源实现，而 Google 公司开发 Bigtable 是为了它的搜索引擎应用。Google 和其他搜索引擎是基于建立索引来完成快速搜索服务的。该索引提供了特定词语，包含该词语的所有文档的映射。
+对插入图中的节点 4 而言，先看从左到右的指向，先让节点 4 指向节点 1 原来的下一个节点，也就是节点 2，然后让节点 1 指向节点 4，这样就完成了从右到左的指向修改。再看从右到左，先让节点 4 指向节点 1，然后节点 2 指向节点 4，这个时候就完成了从右到左的指向，那么节点 1 和节点 2 之间的原有关联关系都已经失效，这样就完成了在链表中新增节点 4 的功能。
 
-搜索引擎的文档库是整个互联网，搜索的特定词语就是用户搜索框里输入的任何信息，Bigtable 和开源的 HBase 为这种文档库提供存储及行级的访问。下面简单地分析 HBase 应用于网络搜索的逻辑过程。
+#### 2）删除节点
 
-首先，网络爬虫持续不断地从网络上抓取新页面，并将页面内容存储到 HBase 中，爬虫可以插入和更新 HBase 里的内容；然后，用户可以利用 MapReduce 在整张表上计算并生成索引，为网络搜索做准备；接着，用户发起搜索请求；最后，搜索引擎查询建立好的索引列表， 获取文档索引后，再从 HBase 中获取所需的文档内容，最后将搜索结果提交给用户。
+对删除图中的节点 3 而言，首先让节点 2 从左到右指向后续节点，然后让后续节点指向节点 2，这样节点 3 就脱离了链表，也就是断绝了与节点 2 和后继节点的关联关系，然后对节点 3 进行内存回收，无须移动任何节点，就完成了删除。
 
-## 捕获增量数据
+由此可见，链表结构的使用是需要注意场景的，对于那些经常需要对数据进行插入和删除的列表数据使用它是十分方便的，因为它可以在不移动其他节点的情况下完成插入和删除。而对于需要经常查找的，使用它性能并不佳，它只能从左到右或者从右到左的查找和比对。
 
-数据通常是动态增加的，随着时间的推移，数据量会越来越大，例如，网站的日志信息、邮箱的邮件信息等。通常通过采集工具捕获来自各种数据源的增量数据，再使用 HBase 进行存储。
+因为是双向链表结构，所以 Redis 链表命令分为左操作和右操作两种命令，左操作就意味着是从左到右，右操作就意味着是从右到左。Redis 关于链表的命令如表 1 所示。
 
-例如，这种采集工具可能是网页爬虫，采集的数据源可能是记录用户点击的广告信息、驻留的时间长度以及对应的广告效果数据，也可能是记录服务器运行的各种参数数据。
+表 1 Redis 关于链表的命令
 
-下面介绍一些有关该使用场景的成功案例。
+| 命   令 | 说   明 | 备   注 |
+| lpush key node1 [node2.].....  | 把节点 node1 加入到链表最左边 | 如果是 node1、node2 ...noden 这样加入， 那么链表开头从左到右的顺序是 noden...node2、node1 |
+| rpush key node1[node2]...... | 把节点 node1 加入到链表的最右边 | 如果是 node1、node2....noden 这样加  入，那么链表结尾从左到右的顺序是 node1、node2,node3...noden |
+| lindex key index | 读取下标为 index 的节点 | 返回节点字符串，从 0 开始算 |
+| llen key | 求链表的长度 | 返回链表节点数 |
+| lpop key | 删除左边第一个节点，并将其返回 | —— |
+| rpop key | 删除右边第一个节点，并将其返回 |  —— |
+| linsert key before&#124;after pivot node | 插入一个节点 node，并且可以指定在值为 pivot 的节点的前面（before）或者后面（after)） | 如果 list 不存在，则报错；如果没有值为对应 pivot 的，也会插入失败返回 -1 |
+| lpushx list node  | 如果存在 key 为 list 的链表，则插入节点 node, 并且作为从左到右的第一个节点  | 如果 list 不存在，则失败 |
+| rpushx list node  | 如果存在 key 为 list 的链表，则插入节点 node，并且作为从左到右的最后个节点 | 如果 list 不存在，则失败 |
+| lrange list start end | 获取链表 list 从 start 下标到 end 下标的节点值 | 包含 start 和 end 下标的值 |
+| lrem list count value | 如果 count 为 0，则删除所有值等于 value 的节 点：如果 count 不是 0，则先对 count 取绝对值，假设记为 abs，然后从左到右删除不大于 abs 个等于 value 的节点 | 注意，count 为整数，如果是负数，则 Redis 会先求取其绝对值，然后传递到后台操作 |
+| lset key index node | 设置列表下标为 index 的节点的值为 node | —— |
+| ltrim key start stop | 修剪链表，只保留从 start 到 stop 的区间的节点，其余的都删除掉 | 包含 start 和 end 的下标的节点会保留 |
 
-#### 存储监控参数
+表 1 所列举的就是常用的链表命令，其中以“l”开头的代表左操作，以“r”开头的代表右操作。对于很多个节点同时操作的，需要考虑其花费的时间，链表数据结构对于查找而言并不适合于大数据，而 Redis 也给了比较灵活的命令对其进行操作。Redis 关于链表的操作命令，如图 3 所示。
 
-大型的、基于 Web 的产品后台一般都拥有成百上千台服务器，这些服务器不仅为前端的大量用户提供服务，同时还需要提供日志采集、数据存储、数据处理等各种功能。
+![Redis 关于链表的操作命令](img/159384ac72b3250bac0145db4f5612db.png)
+图 3  Redis 关于链表的操作命令
+这里展示了关于 Redis 链表的常用命令，只是对于大量数据操作的时候，我们需要考虑插入和删除内容的大小，因为这将是十分消耗性能的命令，会导致 Redis 服务器的卡顿。对于不允许卡顿的一些服务器，可以进行分批次操作，以避免出现卡顿。
 
-为了保证产品的正常运行，监控服务器和服务器上运行的软件的健康状态是至关重要的。大规模监控整个环境需要能够采集和存储来自不同数据源的各种参数的监控系统。OpenTSDB 正是这种监控系统，它可以从大规模集群中获取相应的参数并进行存储、索引和服务。
+需要指出的是，之前这些操作链表的命令都是进程不安全的，因为当我们操作这些命令的时候，其他 Redis 的客户端也可能操作同一个链表，这样就会造成并发数据安全和一致性的问题，尤其是当你操作一个数据量不小的链表结构时，常常会遇到这样的问题。
 
-OpenTSDB（Open Time Series Database）是一个开源框架，其含义是开放时间序列数据库。这个框架使用 HBase 作为核心平台来存储和检索所收集的参数，可以灵活地支持增加参数，也可以支持采集上万台机器和上亿个数据点，具有高可扩展性。
+为了克服这些问题，Redis 提供了链表的阻塞命令，它们在运行的时候，会给链表加锁，以保证操作链表的命令安全性，如表 2 所示。
 
-OpenTSDB 作为数据收集和监控系统，一方面能够存储和检索参数数据并保存很长时间，另一方面如果需要增加功能也可以添加各种新参数。最终 OpenSTDB 对 HBase 中存储的数据进行分析,并以图形化方式展示集群中的网络设备、操作系统及应用程序的状态。
+表 2 链表的阻塞命令
 
-#### 存储用户交互数据
+| 命   令 | 说   明 | 备   注 |
+| blpop key timeout | 移出并获取列表的第一个元索，如果列表没有元素会阻塞列表直到等待超时或发现可弹出元索为止  | 相对于 lpop 命令，它的操作是进程安全的 |
+| brpop key timeout | 移出并获取列表的最后一个元素，如果列表没有元素会阻塞列表直到等待超时或发现可弹出元素为止 | 相对于 rpop 命令，它的操作是进程安全的 |
+| rpoplpush key sre dest | 按从左到右的顺序，将一个链表的最后一个元素移除，并插入到目标链表最左边 | 不能设置超时时间 |
+| brpoplpush key src dest timeout | 按从左到右的顺序，将一个链表的最后一个元素移除，并插入到目标链表最左边，并可以设置超时时间 | 可设置超时时间 |
 
-对基于 Web 的应用，还有一种很重要的数据，即用户交互数据。这一类数据包含了用户的访问网站的行为习惯。通过分析用户交互数据，就可以获取用户在网站上的活动信息。例如，用户看了什么？某个按钮被用户点击了多少次？用户最近搜索了什么？从这些信息就可以了解用户的需求，从而针对不同的用户提供不同的应用。
+当使用这些命令时，Redis 就会对对应的链表加锁，加锁的结果就是其他的进程不能再读取或者写入该链表，只能等待命令结束。加锁的好处可以保证在多线程并发环境中数据的一致性，保证一些重要数据的一致性，比如账户的金额、商品的数量。
 
-例如，Facebook 里的 Like 按钮，每次用户 Like —个特定主题，计数器增加一次。FaceBook 使用 HBase 的计数器来计量人们 Like 特定网页的次数。内容原创人或网页主人可以得到近乎实时的、用户 Like 他们网页的数据信息。他们可以据此更敏捷地判断应该提供什么内容。
+不过在保证这些的同时也要付出其他线程等待、线程环境切换等代价，这将使得系统的并发能力下降，关于多线程并发锁，未来还会提及，这里先看 Redis 链表阻塞操作命令，如图 4 所示。
 
-Facebook 为此创建了一个名为 Facebook Insight 的系统，该系统需要一个可扩展的存储系统。公司考虑了很多种可能，包括关系型数据库、内存数据库和 Cassandra 数据库，最后决定使用 HBase。基于 HBase，Facebook 可以很方便地横向扩展服务规模，提供给数百万用户，也可以继续使用他们已有的运行大规模 HBase 机群的经验。该系统每天处理数百亿条事件，记录数百个参数。
+![Redis 链表阻塞操作命令](img/2b109772adc609f25d406d617181eb8d.png)
+图 4  Redis 链表阻塞操作命令
+在实际的项目中，虽然阻塞可以有效保证了数据的一致性，但是阻塞就意味着其他进程的等待，CPU 需要给其他线程挂起、恢复等操作，更多的时候我们希望的并不是阻塞的处理请求，所以这些命令在实际中使用得并不多，后面还会深入探讨关于高并发锁的问题。
 
-#### 存储遥测数据
+使用 Spring 去操作 Redis 链表的命令，这里继续保持代码清单 18-5 关于 RedisTemplate 的配置，在此基础上获取 RedisTemplate 对象，然后输入以下代码，它实现的是图 3 所示的命令功能，请读者仔细体会。
 
-软件在运行时经常会岀现异常的情况，这时大部分软件都会生成一个软件崩溃报告，这类软件运行报告会返回软件开发者，用来评测软件质量和规划软件开发路线图。
+```
 
-例如，FireFox 网络浏览器是 Mozilla 基金会旗下的产品，支持各种操作系统，全世界数百万台计算机上都有它的身影。 当 FireFox 浏览器崩溃时，会以 Bug 报告的形式返回一个软件崩溃报告给 Mozilla。
+public static void testList() {
+    ApplicationContext applicationcontext = new ClassPathXmlApplicationContext("applicationContext.xml");
+    RedisTemplate redisTemplate = applicationcontext.getBean(RedisTemplate.class);
+    try {
+        //删除链表，以便我们可以反复测试
+        redisTemplate.delete("list");
+        //把 node3 插入链表 list
+        redisTemplate. opsForList ().leftPush ("list", "node3");
+        List<String> nodeList = new ArrayList<String>();
+        for (int i = 2; i >= 1; i--){
+            nodeList.add("nnode" + i);
+        }
+        //相当于 lpush 把多个价值从左插入链表
+        redisTemplate.opsForList().leftPushAll("list", nodeList);
+        //从右边插入一个节点
+        redisTemplate.opsForList().rightPush("list", "node4");
+        //获取下标为 0 的节点
+        String nodel = (String) redisTemplate.opsForList() .index("list", 0);
+        //获取链表长度
+        long size = redisTemplate.opsForList ().size ("listn");
+        //从左边弹出一个节点
+        String lpop = (String) redisTemplate.opsForList().leftPop("list");
+        //从右边弹出一个节点
+        String rpop = (String) redisTemplate.opsForList().rightPop("list");
+        //注意，需要使用更为底层的命令才能操作 linsert 命令
+        //使用 linsert 命令在 node2 前插入一个节点
+        redisTemplate.getConnectionFactory().getConnection().lInsert("list".getBytes("utf-8"),RedisListCommands.Position.BEFORE,"node2".getBytes("utf-8"),"before_node".getBytes("utf-8"));
+        //使用 linsert 命令在 node2 后插入一个节点
+        redisTemplate.getConnectionFactory().getConnection().linsert("list".getBytes("utf-8"),RedisListCommands.Position.AFTER,"node2".getBytes("utf-8"), "after_node".getBytes("utf-8"));
+        //判断 list 是否存在，如果存在则从左边插入 head 节点
+        redisTemplate.opsForList().leftPushlfPresent("list", "head");
+        //判断 list 是否存在，如果存在则从右边插入 end 节点
+        redisTemplate.opsForList().rightPushlfPresent("list", "end");
+        //从左到右，或者下标从 0 到 10 的节点元素
+        List valueList = redisTemplate.opsForList().range("list", 0, 10);
+        nodeList.clear();
+        for (int i = 1; i <= 3; i++) {
+            nodeList.add("node");
+        }
+        //在链表左边插入三个值为 node 的节点
+        redisTemplate.opsForList().leftPushAll.("list", nodeList);
+        //从左到右删除至多三个 node 节点
+        redisTemplate.opsForList().remove("list", 3,"node");
+        //给链表下标为 0 的节点设置新值
+        redisTemplate.opsForList().set("list",0, "new_head_value");
+    } catch (UnsupportedEncodingException ex) {
+        ex.printStackTrace();
+    }
+    //打印链表数据
+    printList(redisTemplate, "list");
+}
+public static void printList(RedisTemplate redisTemplate, String key) { 
+//链表长度
+    Long size = redisTemplate.opsForList().size(key);
+}
+```
 
-Mozilla 使用一个叫作 Socorro 的系统收集这些报告，用来指导研发部门研制更稳定的产品。Socorro 系统的数据存储和分析建构在 HBase 上，采用 HBase 使得基本分析可以用到比以前多得多的数据。用这些分析数据指导 Mozilla 的开发人员，使其更有针对性地研制出 Bug 更少的版本。
+这里所展示的是 RedisTemplate 对于 Redis 链表的操作，其中 left 代表左操作，right 代表右操作。有些命令 Spring 所提供的 RedisTemplate 并不能支持，比如 linsert 命令，这个时候可以使用更为底层的方法去操作，正如代码中的这段：
 
-趋势科技（TrendMicro）为企业客户提供互联网安全解决方案，来应对网络上千变万化的安全威胁。安全的重要环节是感知，日志收集和分析对于提供这种感知能力是至关重要的。
+```
 
-趋势科技使用 HBase 来收集和分析日志活动，每天可收集数十亿条记录。HBase 中灵活的模式支持可变的数据结构，当分析流程重新调整时，可以增加新属性。
+// 使用 linsert 命令在 node2 前插入一个节点
+redisTemplate.getConnectionFactory().getConnection().lInsert("list".getBytes("utf-8"),
+RedisListCommands.Position.BEFORE,"node2".getBytes("utf-8"),
+"before_node".getBytes("utf-8"));
+```
 
-#### 广告效果和点击流
+在多值操作的时候，往往会使用 list 进行封装，比如 leftPushAll 方法，对于很大的 list 的操作需要注意性能，比如 remove 这样的操作，在大的链表中会消耗 Redis 系统很多的性能。
 
-在线广告是互联网产品的一项主要收入来源。互联网企业提供免费服务给用户，在用户使用服务时投放广告给目标用户。这种精准投放需要针对用户交互数据做详细的捕获和分析，以理解用户的特征；再基于这种特征，选择并投放广告。企业可使用精细的用户交互数据建立更优的模型，进而获得更好的广告投放效果和更多的收入。
+正如之前的探讨一样，Redis 还有对链表进行阻塞操作的命令，这里 Spring 也给出了支持，代码如下所示。
 
-但这类数据有两个特点：它以连续流的形式出现，它很容易按用户划分。在理想情况下，这种数据一旦产生就能够马上使用。
+```
 
-HBase 非常适合收集这种用户交互数据，并已经成功地应用在相关领域。它可以增量捕获第 一手点击流和用户交互数据，然后用不同处理方式来处理数据，电商和广告监控行业都已经非常熟练地使用了类似的技术。
+public static void testBList()    {
+    ApplicationContext applicationContext = new ClassPathXmlApplicationContext("applicationContext.xml");
+    RedisTemplate redisTemplate    = applicationContext.getBean(RedisTemplate.class);
+    // 清空数据，可以重复测试
+    redisTemplate.delete ("list1");
+    redisTemplate.delete ("list2");
+    //初始化链表 list1
+    List<String> nodeList = new ArrayList<String>();
+    for (int i=1; i<=5; i++)    {
+        nodeList.add("node" + i);
+    }
+    redisTemplate.opsForList().leftPushAll("list1", nodeList);
+    // Spring 使用参数超时时间作为阻塞命令区分，等价于 blpop 命令，并且可以设置时间参数 redisTemplate.opsForList().leftPop ("list1", 1, TimeUnit.SECONDS);
+    // Spring 使用参数超时时间作为阻塞命令区分，等价于 brpop 命令，并且可以设置时间参数
+    redisTemplate.opsForList().rightPop("list1", 1, TimeUnit.SECONDS);
+    nodeList.clear();
+    // 初始化链表 list2
+    for (int i=1; i<=3; i++)    {
+        nodeList.add("dato" + i);
+    }
+    redisTemplate.opsForList().leftPushAll("list2", nodeList);
+    // 相当于 rpoplpush 命令，弹出 list1 最右边的节点，插入到 list2 最左边
+    redisTemplate.opsForList().rightPopAndLeftPush("list1","list2");
+    // 相当于 brpoplpush 命令，注意在 Spring 中使用超时参数区分 redisTemplate.opsForList().rightPopAndLeftPush("list1", "list2",1,TimeUnit.SECONDS);
+    // 打印链表数据
+    printList(redisTemplate, "list1");
+    printList(redisTemplate, "list2");
+}
 
-例如，淘宝的实时个性化推荐服务，中间推荐结果存储在 HBase 中，广告相关的用户建模数据也存储在 HBase 中，用户模型多种多样，可以用于多种不同场景，例如，针对特定用户投放什么广告，用户在电商门户网站上购物时是否实时报价等。
+```
 
-HBase 已成熟地应用于国内外的很多大公司，总之，HBase 适合用来存储各种类型的大规模的数据，可为用户提供实时的在线查询，同时也支持离线的应用。但对于需要 JOIN 和其他一些关系型数据特性要求时，HBase 就不适用了，因此，还是要根据应用场景合理地使用 HBase，发挥 HBase 的优势。
+这里展示了 Redis 关于链表的阻塞命令，在 Spring 中它和非阻塞命令的方法是一致的，只是它会通过超时参数进行区分，而且我们还可以通过方法设置时间的单位，使用还是相当简单的。注意，它是阻塞的命令，在多线程的环境中，它能在一定程度上保证数据的一致而性能却不佳。

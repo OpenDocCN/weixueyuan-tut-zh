@@ -1,116 +1,51 @@
-# HBase Java 编程入门教程
+# Redis 内存回收策略
 
-> 原文：[`c.biancheng.net/view/6523.html`](http://c.biancheng.net/view/6523.html)
+> 原文：[`c.biancheng.net/view/4562.html`](http://c.biancheng.net/view/4562.html)
 
-一款优秀的数据库除了会提供客户端，还会提供编程语言接口，HBase 也不例外。HBase 除了支持使用 Shell 客户端来操作（请看《HBase Shell 及其常用命令》），还提供了多种编程语言的接口，其中 Java API 是原生支持的，其它编程语言接口需要通过 Thrift 协议支持。
+Redis 也会因为内存不足而产生错误，也可能因为回收过久而导致系统长期的停顿，因此掌握执行回收策略十分有必要。在 Redis 的配置文件中，当 Redis 的内存达到规定的最大值时，允许配置 6 种策略中的一种进行淘汰键值，并且将一些键值对进行回收，让我们来看看它们的特点。
 
-本节只讲解 Java 接口编程，其它编程语言接口请转到《HBase Thrift 协议编程入门教程》。
+首先，Redis 的配置文件放在 Redis 的安装目录下，在 Windows 中是 redis.windows.conf，在 Lunix/Unix 中则是 redis.conf。Redis 对其中的一个配置项——maxmemory-policy，提供了这样的一段描述：
 
-HBase 官方代码包里含有原生访问客户端，由 Java 语言实现，相关的类在 org.apache.hadoop.hbase.client 包中，都是与 HBase 数据存储管理相关的 API。
+# volatile-lru -> remove the key with an expire set using an LRU algorithm
+# allkeys-lru -> remove any key according to the LRU algorithm
+# volatile-random -> remove a random key with an expire set
+# allkeys-random -> remove a random key, any key
+# volatile-ttl -> remove the key with the nearest expire time (minor TTL)
+# noeviction -> don't expire at all, just return an error on write operations
 
-例如，若要管理 HBase，则用 Admin 接口来创建、删除、更改表；若要向表格添加数据或查询数据，则使用 Table 接口等。
+更深一步地阐述它们的含义。
 
-下面主要介绍 Admin 和 Table 接 口以及 HBaseConfiguration、HTableDescriptor、HClounmDescriptor、Put、Get、Result、Scan 这些类的功能和常用方法。
+表 1 maxmemory-policy 说明
 
-## 开发环境配置
+| 名称 | 说明 |
+| volatile-lru | 采用最近使用最少的淘汰策略，Redis 将回收那些超时的（仅仅是超时的）键值对，也就是它只淘汰那些超时的键值对。 |
+| allkeys-lru | 采用淘汰最少使用的策略，Redis 将对所有的（不仅仅是超时的）键值对采用最近使用最少的淘汰策略。 |
+| volatile-random | 采用随机淘汰策略删除超时的（仅仅是超时的）键值对。 |
+| allkeys-random | 采用随机淘汰策略删除所有的（不仅仅是超时的）键值对，这个策略不常用。 |
+| volatile-ttl | 采用删除存活时间最短的键值对策略。 |
+| noeviction | 根本就不淘汰任何键值对，当内存已满时，如果做读操作，例如 get 命令，它将正常工作，而做写操作，它将返回错误。也就是说，当 Redis 采用这个策略内存达到最大的时候，它就只能读而不能写了。 |
 
-使用 Java 开发 Hbase，只需要将用到的 HBase 库包加入引用路径即可。本节使用 Eclipse 集成开发环境进行编程，如果系统已经安装 Maven，可以创建 Maven 项目，在 pom.xml 配置 HBase 的依赖即可自动下载 jar 包。
+Redis 在默认情况下会采用 noeviction 策略。换句话说，如果内存已满，则不再提供写入操作，而只提供读取操作。显然这往往并不能满足我们的要求，因为对于互联网系统而言，常常会涉及数以百万甚至更多的用户，所以往往需要设置回收策略。
 
-下面讲解如何在 Eclipse 中手动导入 HBase 库包。
+这里需要指出的是：LRU 算法或者 TTL 算法都是不是很精确算法，而是一个近似的算法。Redis 不会通过对全部的键值对进行比较来确定最精确的时间值，从而确定删除哪个键值对，因为这将消耗太多的时间，导致回收垃圾执行的时间太长，造成服务停顿。
 
-首先创建 Java 工程，然后鼠标右键单击工程名，选择属性，在“Java 构建路径”→“库”→ “添加外部 JAR”中找到 HBase 安装目录下的 lib 子目录，将需要的库包导入工程，即可进行基本的 HBase 操作，如下图所示。
+而在 Redis 的默认配置文件中，存在着参数 maxmemory-samples，它的默认值为 3，假设采取了 volatile-ttl 算法，让我们去了解这样的一个回收的过程，假设当前有 5 个即将超时的键值对，如表 2 所示。
 
-![](img/0b86886e8c64ac4ca05c303b8ee40d0d.png)然后在工程目录 src 下新建类文件，在 Java 文件中导入需要的 HBase 包，如 HBase 的环境配置包、HBase 客户端接口、工具包等：
+表 2 volatile-ttl 样本删除方式
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.*;
-import org.apache.hadoop.hbase.client.*;
-import org.apache.hadoop.hbase.util.Bytes;
+| 键值对 | 剩余超时秒数 | 备注 |
+| A1 | 6 | 属于探测样本 |
+| A2 | 3 | 属于探测样本中的最短值，因此最先删除 |
+| A3 | 4 | 属于探测样本 |
+| A4 | 1 | 最短值，但是它不属于探测样本，所以没有最先删除 |
+| A5 | 9 | 但不属于样本 |
 
-在使用过程中可以根据需要加入更多的包，如 HBase 的过滤器等。
+由于配置 maxmemory-samples 的值为 3，如果 Redis 是按表中的顺序探测，那么它只会取到样本 A1、A2、A3，然后进行比较，因为 A2 过期剩余秒数最少，所以决定淘汰 A2，因此 A2 是最先被删除的。
 
-## 构建 Java 客户端
+注意，此时即将过期且剩余超时秒数最短的 A4 却还在内存中，因为它不属于探测样本。这就是 Redis 中采用的近似算法。当设置 maxmemory-samples 越大，则 Redis 删除的就越精确，但是与此同时带来不利的是，Redis 也就需要花更多的时间去计算和匹配更为精确的值。
 
-在分布式环境下，客户端访问 HBase 需要通过 ZooKeeper 的地址和端口来获取当前活跃的 Master 和所需的 RegionServer 地址。因此需要先用 HBaseCongifiguration 类配置 ZooKeeper 的地址和端口，然后再使用 Connection 类建立连接。
+回收超时策略的缺点是必须指明超时的键值对，这会给程序开发带来一些设置超时的代码，无疑增加了开发者的工作量。
 
-示例代码如下：
+对所有的键值对进行回收，有可能把正在使用的键值对删掉，增加了存储的不稳定性。对于垃圾回收的策略，还需要注意的是回收的时间，因为在 Redis 对垃圾的回收期间，会造成系统缓慢。
 
-```
-
-public static Configuration conf;
-public static Connection connection;
-public void getconnect() throws IOException {
-    conf=HBaseConfiguration.create();
-    conf.set("hbase.zookeeper.quorum", "cm-cdh01");
-    conf.set("hbase.zookeeper.property.clientPort","2181");
-    try{
-        connection=ConnectionFactory.createConnection(conf);
-    } catch (IOException e) {
-        e.printStackTrace();
-    }
-}
-```
-
-cm-cdh01 为 ZooKeeper 的地址，2181 为端口号。HBaseConfiguration.create() 方法用来创建相关配置，然后使用此配置信息进行数据库的连接。
-
-## 表操作
-
-连接数据库后，完成表的创建和删除。示例代码如下：
-
-```
-
-public void createtable() throws IOException{
-    TableName tableName = TableName.valueOf("Student");
-    Admin admin = connection.getAdmin();
-    if{admin.tableExists(tableName)) {
-        admin.disableTable(tableName);
-        admin.deleteTable(tableName);
-        System.out.printin(tableName.toString() + "is exist,delete it");
-    }
-    HTableDescriptor tdesc = new HTableDescriptor(tableName);
-    HColumnDescriptor colDesc = new HColumnDescriptor("Stulnfo");
-    tdesc.addFamily(colDesc);
-    tdesc.addFamily(new HColumnDescriptor("Grades"));
-    admin.createTable(tdesc);
-    admin.close();
-}
-```
-
-其中，Admin 是 Java 的接口类型，在使用 Admin 时，必须调用 Connection.getAdmin() 方法返回一个子对象，然后用这个 Admin 接口来操作返回的子对象方法。
-
-这个接口用于管理 HBase 数据库的表信息，包括创建、删除表和列出所有表项等，主要的方法参见下表。
-
-Admin 接口的主要方法
-
-| 方法返回类型 | 方法描述 |
-| void | abort(String why, Throwable e) 终止服务器或客户端 |
-| void | closeRegion(byte[] regionname, String serverName) 关闭 Region |
-| void | createTableb(TableDescriptor, desc) 创建表 |
-| void | deleteTable(TableName tableName) 删除表 |
-| void | disableTable(TableName tableName) 使表无效 |
-| void | enableTable(TableName tableName) 使表有效 |
-| HTableDescriptor[]  | listTables() 列出所有表项 |
-| HTableDescriptor[] | getTableDescriptor(TableName tableName) 获取表的详细信息 |
-
-使用 get 方法获取某一行数据，代码示例如下：
-
-```
-
-public void getData() throws IOException{
-    Table table = connection.getTable(TableName.valueOf("Student"));
-    Get get = new Get(Bytes.toBytes("row1"))；
-    Result result= table.get(get);
-    for (Cell cell:resuIt.rawCells()){
-        System.out.println(new String(CellUtil.getCellKeyAsString(cell)));
-        System.out.printin(new String(CellUtil.cloneFamily(cell)));
-        System.out.printin(new String(CellUtil.cloneQualifier(cell)));
-        System.out.printin(new String(CellUtil.cloneValue(cell)));
-        System.out.printin(cell.getTimestamp());
-    }
-    table.close();
-}
-```
-
-通过 table.get() 方法进行查询后，将结果存入 result 中，其中包含多个键值对，本例中使用循环的方法将键值对逐个打印出来。CellUtil 接口提供每个单元格的定位值，如行键、列族、列和时间戳。
-
-对 HBase 表的增、删、改、查，org.apache.hadoop.hbase.client 包提供了相应的类，除了已经举例说明的插入数据使用的 put 类、根据行键获取数据的 get 类外，还有进行全表扫描的 scan 类、 删除某行信息的 delete 类，甚至提供了扫描数据时进行过滤的 FilterList 类，读者可以在 HBase 官网获取详细信息。
+因此，控制其回收时间有一定好处，只是这个时间不能过短或过长。过短则会造成回收次数过于频繁，过长则导致系统单次垃圾回收停顿时间过长，都不利于系统的稳定性，这些都需要设计者在实际的工作中进行思考。
